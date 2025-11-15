@@ -9,15 +9,25 @@ class RAGPipeline:
             n_ctx=cfg["model"]["ctx_tokens"],
             n_threads=cfg["model"]["n_threads"],
             n_gpu_layers=cfg["model"]["n_gpu_layers"],
+            verbose=False,
         )
         self.retriever = HybridRetriever(cfg)
 
     def query(self, question: str):
-        ctxs = self.retriever.search(question,
-                                     self.cfg["retrieval"]["top_k"],
-                                     self.cfg["retrieval"]["rerank_k"],
-                                     self.cfg["retrieval"]["hybrid_alpha"])
-        context_text = "\n\n".join([f"[{i}] {c[:400]}" for i, c in enumerate(ctxs)])
+        retrieved = self.retriever.search(question,
+                                          self.cfg["retrieval"]["top_k"],
+                                          self.cfg["retrieval"]["rerank_k"],
+                                          self.cfg["retrieval"]["hybrid_alpha"])
+        
+        # Extract sources for later display (keep full text for detailed output)
+        sources = [{
+            "title": r["title"],
+            "score": r["score"],
+            "text_full": r["text"],  # full chunk
+            "text_snippet": r["text"][:200]  # snippet for preview
+        } for r in retrieved]
+        
+        context_text = "\n\n".join([f"[{i}] {r['text'][:400]}" for i, r in enumerate(retrieved)])
         prompt = (
             "You are a helpful assistant.\n"
             f"Context:\n{context_text}\n\n"
@@ -37,6 +47,7 @@ class RAGPipeline:
                 top_p=self.cfg["model"]["top_p"],
                 repeat_penalty=self.cfg["model"]["repeat_penalty"],
             )
-            return response["choices"][0]["text"].strip()
+            answer = response["choices"][0]["text"].strip()
+            return {"answer": answer, "sources": sources}
         except Exception as e:
-            return f"❌ LLM error: {e}"
+            return {"answer": f"❌ LLM error: {e}", "sources": []}

@@ -5,6 +5,7 @@ from rank_bm25 import BM25Okapi
 
 def process_file(path, cfg):
     corpus_dir = cfg["paths"]["corpus_dir"]
+    os.makedirs(corpus_dir, exist_ok=True)
     text = ""
     if path.lower().endswith(".pdf"):
         reader = PdfReader(path)
@@ -22,6 +23,7 @@ def process_file(path, cfg):
 def ingest_corpus(cfg):
     corpus_dir = cfg["paths"]["corpus_dir"]
     index_dir = cfg["paths"]["index_dir"]
+    os.makedirs(corpus_dir, exist_ok=True)
     os.makedirs(index_dir, exist_ok=True)
 
     embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
@@ -53,4 +55,7 @@ def ingest_corpus(cfg):
     # BM25
     bm25 = BM25Okapi([c.split() for c in chunks])
     pickle.dump(bm25, open(os.path.join(index_dir, "bm25.pkl"), "wb"))
+    
+    # Save metadata
+    pickle.dump(meta, open(os.path.join(index_dir, "meta.pkl"), "wb"))
     print("✅ Corpus ingested & indexed successfully.")

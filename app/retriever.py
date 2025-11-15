@@ -11,18 +11,24 @@ class HybridRetriever:
         self.bm25 = None
         self.faiss_index = None
         self.docs = []
+        self.meta = []
         self._load_indexes()
 
     def _load_indexes(self):
         bm25_path = os.path.join(self.index_dir, "bm25.pkl")
         faiss_path = os.path.join(self.index_dir, "faiss.index")
         docs_path = os.path.join(self.index_dir, "docs.pkl")
+        meta_path = os.path.join(self.index_dir, "meta.pkl")
         if os.path.exists(bm25_path):
             self.bm25 = pickle.load(open(bm25_path, "rb"))
         if os.path.exists(faiss_path):
             self.faiss_index = faiss.read_index(faiss_path)
         if os.path.exists(docs_path):
             self.docs = pickle.load(open(docs_path, "rb"))
+        if os.path.exists(meta_path):
+            self.meta = pickle.load(open(meta_path, "rb"))
+        else:
+            self.meta = [{"title": "Unknown"} for _ in self.docs]
 
     def search(self, query, top_k=3, rerank_k=3, alpha=0.65):
         if not self.faiss_index or not self.bm25: 
@@ -40,4 +46,11 @@ class HybridRetriever:
             score = alpha * dense + (1-alpha) * sparse
             fused.append((i, score))
         fused = sorted(fused, key=lambda x: x[1], reverse=True)[:top_k]
-        return [self.docs[i] for i,_ in fused]
+        results = []
+        for i, score in fused:
+            results.append({
+                "text": self.docs[i],
+                "score": score,
+                "title": self.meta[i].get("title", "Unknown") if i < len(self.meta) else "Unknown"
+            })
+        return results

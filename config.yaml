@@ -1,5 +1,5 @@
 model:
-  gguf_path: "models/gguf/llama-3.2-3b-instruct.Q4_K_M.gguf"
+  gguf_path: "models/gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
   ctx_tokens: 2048
   n_threads: 6
   n_gpu_layers: 20

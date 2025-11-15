@@ -18,6 +18,7 @@ def query_basic(question: str):
         n_ctx=CFG["model"]["ctx_tokens"],
         n_threads=CFG["model"]["n_threads"],
         n_gpu_layers=CFG["model"]["n_gpu_layers"],
+        verbose=False,
     )
     console.print(f"💬 [cyan]Question:[/cyan] {question}")
     res = llm(
@@ -36,8 +37,20 @@ def query_basic(question: str):
 @app.command("query-rag")
 def query_rag(question: str):
     rag = RAGPipeline(CFG)
-    ans = rag.query(question)
+    result = rag.query(question)
+    ans = result["answer"]
+    sources = result["sources"]
+    
     console.print("\n🤖 [green]Answer:[/green] " + ans)
+    
+    if sources:
+        console.print("\n📚 [cyan]Retrieved Sources:[/cyan]")
+        for i, src in enumerate(sources, 1):
+            score_pct = min(100, max(0, int(src["score"] * 100)))
+            console.print(f"\n  [{i}] 📄 {src['title']} (relevance: {score_pct}%)")
+            console.print(f"      " + "="*70)
+            console.print(f"      {src['text_full'][:500]}..." if len(src['text_full']) > 500 else f"      {src['text_full']}")
+            console.print(f"      " + "="*70)
 
 
 # ------------------------------------------------------------------
@@ -77,8 +90,15 @@ def chat():
         q = input("\nYou: ")
         if q.strip().lower() == "/exit":
             break
-        ans = rag.query(q)
+        result = rag.query(q)
+        ans = result["answer"]
+        sources = result["sources"]
         console.print(f"Assistant: {ans}")
+        if sources:
+            console.print("\n  📚 [dim]Sources used:[/dim]")
+            for src in sources:
+                score_pct = min(100, max(0, int(src["score"] * 100)))
+                console.print(f"    • {src['title']} ({score_pct}%)")
 
 
 if __name__ == "__main__":
