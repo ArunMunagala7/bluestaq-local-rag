@@ -1,5 +1,73 @@
+cat > .gitignore << 'EOF'
+# Model files (large)
 models/
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.dylib
+
+# Virtual environment
 venv/
-.DS_Store
+env/
+
+# Python bytecode
+*.pyc
 __pycache__/
+*.pyo
+*.pyd
+.Python
+
+# Data directories
+data/index/
+data/corpus/
+data/uploads/*.pdf
+data/uploads/*.txt
 *.pkl
+
+# IDE and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Mac system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux system files
+*~
+.directory
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+pip-log.txt
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment variables
+.env
+.env.local
+EOF
