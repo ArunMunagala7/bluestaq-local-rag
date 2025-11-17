@@ -12,13 +12,13 @@ This repository contains a complete local Retrieval-Augmented Generation (RAG) s
 - 🧩 **Quantized LLM** (Llama 3.2 3B Instruct, GGUF format, optimized for local execution)
 - 🔍 **Hybrid Retrieval** (FAISS dense embeddings + BM25 sparse search, alpha=0.65 fusion)
 - 🎯 **Cross-Encoder Reranking** (ms-marco-MiniLM-L-6-v2 for relevance scoring)
-- 📋 **Citation Tracking** (evidence map extraction with source references)
-- 💡 **Follow-up Questions** (automatically generated in separate LLM pass)
-- 🎨 **Multiple Answer Styles** (concise, detailed, bullet, code)
-- 🔧 **Retrieval Justifications** (optional `--justify` flag shows why sources were selected)
+- 📋 **Citation Tracking** (evidence map extraction with inline source tagging)
+- 💡 **Follow-up Questions** (two-pass generation with interactive selection)
+- 🧠 **LLM-Based Justifications** (contextual reasoning for source relevance with `--justify`)
+- 🎨 **Multiple Answer Styles** (detailed [default], concise, bullet, code)
+- 💾 **Query History** (save results to JSONL with `--save`, view with helper script)
 - ⚡ **Expanded Context** (8192 token context window, 2048 max output)
-- 🚨 **Guardrails Ready** (basic topic blocking and PII redaction available via `app/guardrails.py`)
-- 💬 **Interactive CLI** (Typer-based with `query-rag`, `chat`, `upload`, `bulk-upload` commands)
+- 💬 **Interactive Modes** (query-rag with follow-up loops, chat with session settings)
 
 ---
 
@@ -33,17 +33,17 @@ local-rag/
 │   ├── app.py           # Typer CLI with query-rag, chat, upload commands
 │   ├── config.py        # Configuration loader
 │   ├── ingest.py        # Corpus processing and FAISS index building
-│   ├── rag.py           # RAG pipeline (retrieval + generation + follow-ups)
+│   ├── rag.py           # RAG pipeline (retrieval + generation + follow-ups + LLM reasoning)
 │   ├── retriever.py     # Hybrid retrieval with dense/sparse fusion + reranking
 │   └── guardrails.py    # Basic content safety (topic blocking, PII redaction)
 ├── data/
 │   ├── corpus/          # Processed text chunks from source documents
-│   │   ├── Byju's_History_Chapter.pdf.txt (French Revolution)
-│   │   ├── Colombus_tb.pdf.txt (Columbus and Indigenous Peoples)
-│   │   └── Social_Studies_1.pdf.txt (Apartheid, Anti-Colonialism)
 │   ├── index/
 │   │   └── faiss.index  # Dense vector index
-│   └── uploads/         # Drop files here for ingestion
+│   ├── uploads/         # Drop files here for ingestion
+│   └── query_history.jsonl  # Saved queries (created with --save flag)
+├── scripts/
+│   └── view_saved_queries.py  # Helper script to view/search query history
 ├── models/gguf/
 │   └── Llama-3.2-3B-Instruct-Q4_K_M.gguf
 ├── config.yaml          # Runtime configuration (model, retrieval, generation params)
@@ -222,19 +222,22 @@ numpy                      # Numerical operations
 # Single-shot LLM only (no retrieval)
 python -m app.app query-basic "What is Retrieval Augmented Generation?"
 
-# RAG query with default (auto) style
+# RAG query with default (detailed) style
 python -m app.app query-rag "What were the three estates in French society before 1789?"
 
 # RAG query with specific style
-python -m app.app query-rag "How did Columbus treat the Arawak Indians?" --style detailed
+python -m app.app query-rag "How did Columbus treat the Arawak Indians?" --style bullet
 
-# RAG query with retrieval justifications (shows why sources were selected)
+# RAG query with LLM-generated retrieval justifications
 python -m app.app query-rag "What was apartheid in South Africa?" --justify
 
-# Combine style and justifications
-python -m app.app query-rag "What caused the French Revolution?" --style bullet --justify
+# Save query results to data/query_history.jsonl
+python -m app.app query-rag "What caused the French Revolution?" --save
 
-# Interactive chat mode
+# Combine all flags
+python -m app.app query-rag "What was the Bastille?" --style detailed --justify --save
+
+# Interactive chat mode (with session-based settings)
 python -m app.app chat
 
 # Upload a single file to corpus
@@ -242,14 +245,19 @@ python -m app.app upload path/to/file.pdf
 
 # Bulk upload files from data/uploads and rebuild index
 python -m app.app bulk-upload
+
+# View saved query history
+python scripts/view_saved_queries.py
+python scripts/view_saved_queries.py view 1    # View query #1 in detail
+python scripts/view_saved_queries.py search "apartheid"  # Search queries
 ```
 
 ### Answer Styles
 
-The system supports 4 answer styles:
+The system supports 4 answer styles (default: **detailed**):
 
-1. **`concise`** - 1-2 sentence summary
-2. **`detailed`** - In-depth explanation with examples
+1. **`detailed`** - In-depth explanation with examples (default)
+2. **`concise`** - 1-2 sentence summary
 3. **`bullet`** - Short bullet-point list
 4. **`code`** - Code snippet with brief explanation (if applicable)
 5. **`auto`** - Interactive prompt to choose style at runtime
@@ -257,30 +265,36 @@ The system supports 4 answer styles:
 Examples:
 ```bash
 python -m app.app query-rag "What was the Bastille?" --style concise
-python -m app.app query-rag "Describe the subsistence crisis in France" --style detailed
+python -m app.app query-rag "Describe the subsistence crisis in France"  # Uses detailed (default)
 python -m app.app query-rag "List the causes of the French Revolution" --style bullet
 ```
 
 ### Features Demonstrated
 
 **Citation Tracking:**
-- Answers include `[Source 1]`, `[Source 2]` references
+- Answers include `[Source 1]`, `[Source 2]` references tagged at sentence end
 - Evidence map shows which source chunks support each claim
-- Example: `📋 Evidence Map: [Source 1] Byju's_History_Chapter.pdf.txt → "The Bastille was hated by all..."`
+- Example: `📋 Evidence Map: [Source 1] Social_Studies_1.pdf.txt → "Apartheid was a system of..."`
 
 **Follow-up Questions:**
-- Automatically generated after each answer
-- Based on answer content, not just the original query
-- Displayed with 💡 icon after main answer
+- Automatically generated after each answer (two-pass LLM generation)
+- Interactive selection: type `1`, `2`, or `3` to ask a follow-up, or type your own question
+- Works in both `query-rag` and `chat` modes
 
 **Retrieval Justifications** (`--justify` flag):
-- Shows dense embedding scores, BM25 scores, fusion weights
-- Displays reranking scores if enabled
-- Explains top matching terms and text spans
+- **LLM Reasoning**: Natural language explanation of why each source is relevant
+- **Vector Match**: Top matching sentence from dense embeddings
+- **Scores**: Dense, BM25, fusion, and reranking scores
+- **Top Terms**: Keywords that drove BM25 matching
+
+**Query History** (`--save` flag):
+- Saves queries to `data/query_history.jsonl` (JSONL format)
+- Stores: question, answer, sources (full text), evidence map, follow-ups, metadata
+- View with: `python scripts/view_saved_queries.py`
 
 **Chat Mode:**
-- Session-based conversation with persistent style choice
-- Optional justifications for entire session
+- Session-based settings: style, justifications, auto-save (asked once at start)
+- Type `1-3` to ask follow-up questions from previous answer
 - Type `/exit` to quit
 
 ---

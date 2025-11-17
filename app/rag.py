@@ -42,7 +42,12 @@ class RAGPipeline:
             f"{system_prompt}\n\n"
             f"Context:\n{context_text}\n\n"
             f"Question: {question}{prompt_suffix}\n\n"
-            f"Answer using only information from the Context above. Cite each claim with [Source 1], [Source 2], etc.\n"
+            f"Instructions:\n"
+            f"- Write naturally without explicitly mentioning sources (avoid phrases like 'According to Source 1' or 'Source 2 states').\n"
+            f"- After each sentence or claim, add the citation tag [Source N] at the end.\n"
+            f"- If you use information not present in the Context, tag it with [External Knowledge] at the end of that sentence.\n"
+            f"- Use ONLY information from the Context above unless absolutely necessary.\n\n"
+            f"Answer:\n"
         )
 
         prompt_tokens = len(prompt.split())
@@ -68,6 +73,16 @@ class RAGPipeline:
             
             # Extract citations and build evidence map
             evidence_map = self._extract_evidence_map(answer, sources)
+            
+            # LLM-based relevance explanations (only when explain=True for --justify flag)
+            if explain:
+                for source in sources:
+                    llm_reasoning = self._explain_relevance_llm(question, source.get('text_full', '')[:500])
+                    # Add to existing explain dict
+                    if 'explain' in source:
+                        source['explain']['llm_reasoning'] = llm_reasoning
+                    else:
+                        source['explain'] = {'llm_reasoning': llm_reasoning}
             
             # Detect external knowledge usage
             has_external = "[External Knowledge]" in answer or "[External]" in answer
@@ -194,3 +209,26 @@ Provide 3 concise follow-up questions as a numbered list (1., 2., 3.). Only sugg
             return followups
         except Exception:
             return ""
+    
+    def _explain_relevance_llm(self, query: str, chunk: str) -> str:
+        """Use LLM to generate a natural language explanation of why this chunk is relevant."""
+        prompt = f"""Query: "{query}"
+Source excerpt: "{chunk}"
+
+In one concise sentence, explain why this source is relevant to the query. Focus on what specific information it provides.
+Explanation:"""
+        
+        try:
+            response = self.llm(
+                prompt,
+                max_tokens=60,
+                temperature=0.3,  # Lower temp for focused explanations
+                top_p=0.9,
+                repeat_penalty=1.1,
+            )
+            explanation = response["choices"][0]["text"].strip()
+            # Clean up any repeated prompt text
+            explanation = re.sub(r'^(Explanation:|Why relevant:)\s*', '', explanation, flags=re.IGNORECASE)
+            return explanation if explanation else "Provides relevant contextual information."
+        except Exception as e:
+            return f"Error generating explanation: {str(e)[:50]}"

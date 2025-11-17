@@ -1,5 +1,8 @@
 import typer, os, glob
 import math
+import json
+from datetime import datetime
+from pathlib import Path
 from rich.console import Console
 from app.config import CFG
 from app.rag import RAGPipeline
@@ -46,6 +49,7 @@ def query_rag(
         "-s",
         help="Answer style: auto|concise|detailed|bullet|code (auto uses interactive clarifier when needed)",
     ),
+    save: bool = typer.Option(False, "--save", help="Save query results to data/query_history.jsonl"),
 ):
     # determine prompt suffix from style or interactive clarifier
     style_templates = {
@@ -60,8 +64,8 @@ def query_rag(
     # If style is explicitly set and not 'auto', use it directly
     if style != "auto":
         if style not in style_templates:
-            console.print(f"⚠️ Unknown style '{style}', defaulting to 'concise'.")
-            prompt_suffix = style_templates["concise"]
+            console.print(f"⚠️ Unknown style '{style}', defaulting to 'detailed'.")
+            prompt_suffix = style_templates["detailed"]
         else:
             prompt_suffix = style_templates[style]
     else:
@@ -74,11 +78,11 @@ def query_rag(
             if choice in style_templates:
                 prompt_suffix = style_templates[choice]
             else:
-                console.print(f"⚠️ Unknown style '{choice}', defaulting to 'concise'.")
-                prompt_suffix = style_templates["concise"]
+                console.print(f"⚠️ Unknown style '{choice}', defaulting to 'detailed'.")
+                prompt_suffix = style_templates["detailed"]
         except Exception:
-            # non-interactive environments: fall back to concise
-            prompt_suffix = style_templates["concise"]
+            # non-interactive environments: fall back to detailed
+            prompt_suffix = style_templates["detailed"]
 
     followup_suffix = ""
     # Build prompt suffix for generation, but keep retrieval on raw user question
@@ -138,14 +142,24 @@ def query_rag(
                     dense = exp.get('dense', {})
                     fusion = exp.get('fusion', {})
                     sparse = exp.get('sparse', {})
-                    # One-line why
+                    
+                    # LLM-generated reasoning (if available)
+                    llm_reasoning = exp.get('llm_reasoning', '')
+                    if llm_reasoning:
+                        console.print("      [cyan]LLM Reasoning:[/cyan]")
+                        console.print(f"        💡 {llm_reasoning}")
+                    
+                    # Vector-based why (top matching sentence)
                     why = ''
                     spans = dense.get('top_spans', [])
                     if spans:
                         why = spans[0].get('text', '')
-                    console.print("      Why selected:")
+                    console.print("      [dim]Vector Match:[/dim]")
                     if why:
                         console.print(f"        • {why[:120]}{'...' if len(why)>120 else ''}")
+                    else:
+                        console.print(f"        • (No specific sentence match)")
+                    
                     # Numbers
                     console.print("      Scores:")
                     rerank_info = exp.get('rerank', {})
@@ -159,6 +173,79 @@ def query_rag(
                     if terms:
                         top_terms = ", ".join([f"{t['t']} (tf {t['tf']}, idf {t['idf']:.2f})" for t in terms])
                         console.print(f"      Top terms: {top_terms}")
+    
+    # Save query results if --save flag is used
+    if save:
+        save_query_result(question, ans, sources, evidence_map, followup_questions, style)
+        console.print("\n💾 [green]Query saved to data/query_history.jsonl[/green]")
+    
+    # Interactive follow-up selection (only in query-rag mode)
+    if followup_questions:
+        # Parse follow-up questions into a list
+        followup_lines = [line.strip() for line in followup_questions.split('\n') if line.strip() and (line.strip()[0].isdigit() or line.strip().startswith('-'))]
+        if followup_lines:
+            while True:
+                try:
+                    choice = input("\n💬 Ask a follow-up? [1-3 to select, or type your own question, Enter to exit]: ").strip()
+                    if not choice:
+                        # User pressed Enter, exit
+                        break
+                    elif choice in ['1', '2', '3']:
+                        # User selected a numbered follow-up
+                        idx = int(choice) - 1
+                        if idx < len(followup_lines):
+                            # Extract the question text (remove number prefix like "1. ")
+                            followup_q = followup_lines[idx]
+                            followup_q = followup_q.lstrip('0123456789.-) ').strip()
+                            console.print(f"\n[dim]→ Running follow-up:[/dim] {followup_q}\n")
+                            # Recursively call query_rag with the follow-up question
+                            query_rag(followup_q, clarify=clarify, justify=justify, style=style, save=save)
+                            break
+                        else:
+                            console.print(f"⚠️ Invalid selection. Choose 1-{len(followup_lines)}.")
+                    else:
+                        # User typed a custom question
+                        console.print(f"\n[dim]→ Running custom question:[/dim] {choice}\n")
+                        query_rag(choice, clarify=clarify, justify=justify, style=style, save=save)
+                        break
+                except KeyboardInterrupt:
+                    console.print("\n")
+                    break
+                except Exception:
+                    # Non-interactive environment, skip
+                    break
+
+
+def save_query_result(question: str, answer: str, sources: list, evidence_map: list, followup_questions: str, style: str):
+    """Save query results to JSONL file for later reference."""
+    # Ensure data directory exists
+    output_dir = Path("data")
+    output_dir.mkdir(exist_ok=True)
+    
+    # Prepare query record
+    record = {
+        "timestamp": datetime.now().isoformat(),
+        "question": question,
+        "answer": answer,
+        "style": style,
+        "followup_questions": followup_questions,
+        "evidence_map": evidence_map,
+        "sources": [
+            {
+                "id": i + 1,
+                "title": src.get("title", "Unknown"),
+                "score": float(src.get("score", 0.0)),
+                "text_full": src.get("text_full", src.get("text", "")),
+                "explain": src.get("explain", {})
+            }
+            for i, src in enumerate(sources)
+        ]
+    }
+    
+    # Append to JSONL file
+    output_file = output_dir / "query_history.jsonl"
+    with open(output_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 # ------------------------------------------------------------------
@@ -212,11 +299,11 @@ def chat():
         if style_choice in style_templates:
             prompt_suffix = style_templates[style_choice]
         else:
-            console.print(f"⚠️ Unknown style '{style_choice}', defaulting to 'concise'.")
-            prompt_suffix = style_templates["concise"]
+            console.print(f"⚠️ Unknown style '{style_choice}', defaulting to 'detailed'.")
+            prompt_suffix = style_templates["detailed"]
     except Exception:
-        # non-interactive environments: fall back to concise
-        prompt_suffix = style_templates["concise"]
+        # non-interactive environments: fall back to detailed
+        prompt_suffix = style_templates["detailed"]
 
     # Ask if justifications should be shown in this session
     try:
@@ -225,11 +312,25 @@ def chat():
     except Exception:
         justify_session = False
     
+    # Ask if queries should be auto-saved in this session
+    try:
+        s = input("Save each query to history? [y/N]: ").strip().lower()
+        save_session = s == 'y'
+    except Exception:
+        save_session = False
     
     while True:
         q = input("\nYou: ")
         if q.strip().lower() == "/exit":
             break
+        
+        # Check if user entered a number 1-3 (follow-up selection from previous turn)
+        if q.strip() in ['1', '2', '3'] and 'last_followup_lines' in locals() and last_followup_lines:
+            idx = int(q.strip()) - 1
+            if idx < len(last_followup_lines):
+                # Extract the question text
+                q = last_followup_lines[idx].lstrip('0123456789.-) ').strip()
+                console.print(f"[dim]→ Asking follow-up:[/dim] {q}\n")
         
         # Build prompt suffix for generation; keep retrieval on raw user input
         gen_suffix = prompt_suffix
@@ -246,12 +347,21 @@ def chat():
         # Show follow-up questions if generated
         if followup_questions:
             console.print(f"\n💡 [cyan]Follow-up questions:[/cyan]\n{followup_questions}")
+            # Parse and store for next turn
+            last_followup_lines = [line.strip() for line in followup_questions.split('\n') if line.strip() and (line.strip()[0].isdigit() or line.strip().startswith('-'))]
+            if last_followup_lines:
+                console.print("\n[dim]💬 Type 1-3 to ask a follow-up, or type your own question[/dim]")
+        else:
+            # Clear stored follow-ups if none generated
+            last_followup_lines = []
+            last_followup_lines = []
+            console.print(f"\n💡 [cyan]Follow-up questions:[/cyan]\n{followup_questions}")
         
         # Show warnings if external knowledge or uncited claims detected
         if has_external:
             console.print("\n⚠️  [yellow]Note:[/yellow] This answer contains information marked as [External Knowledge] - not from provided sources.")
         if uncited_warning:
-            console.print("\n⚠️  [yellow]Warning:[/yellow] Some claims may not be properly cited. Verify against sources below.")
+            console.print("\n⚠️  [yellow]Warning:[/yellow] Some claims in this answer may not be properly cited. Verify against sources below.")
         
         # Display evidence map if citations were found
         if evidence_map:
@@ -271,11 +381,11 @@ def chat():
                 ssum = sum(exps) if sum(exps) != 0 else 1.0
                 probs = [e / ssum for e in exps]
             else:
-                probs = [0.0 for _ in scores]
+                probs = [0.0 for _ in sources]
 
-            for src, p in zip(sources, probs):
+            for i, (src, p) in enumerate(zip(sources, probs), 1):
                 score_pct = int(max(0, min(100, round(p * 100))))
-                console.print(f"    • {src['title']} ({score_pct}%)")
+                console.print(f"  [{i}] 📄 {src['title']} (relevance: {score_pct}%)")
                 console.print(f"      " + "="*70)
                 chunk = src.get('text_full', src.get('text', ''))
                 console.print(f"      {chunk[:500]}..." if len(chunk) > 500 else f"      {chunk}")
@@ -286,13 +396,25 @@ def chat():
                         dense = exp.get('dense', {})
                         fusion = exp.get('fusion', {})
                         sparse = exp.get('sparse', {})
+                        
+                        # LLM-generated reasoning (if available)
+                        llm_reasoning = exp.get('llm_reasoning', '')
+                        if llm_reasoning:
+                            console.print("      [cyan]LLM Reasoning:[/cyan]")
+                            console.print(f"        💡 {llm_reasoning}")
+                        
+                        # Vector-based why (top matching sentence)
                         why = ''
                         spans = dense.get('top_spans', [])
                         if spans:
                             why = spans[0].get('text', '')
-                        console.print("      Why selected:")
+                        console.print("      [dim]Vector Match:[/dim]")
                         if why:
                             console.print(f"        • {why[:120]}{'...' if len(why)>120 else ''}")
+                        else:
+                            console.print(f"        • (No specific sentence match)")
+                        
+                        # Numbers
                         console.print("      Scores:")
                         rerank_info = exp.get('rerank', {})
                         if rerank_info.get('enabled'):
@@ -300,10 +422,16 @@ def chat():
                             console.print(f"        • Rerank: {rerank_info.get('score', 0):.3f} | Final: {rerank_info.get('final', 0):.3f}")
                         else:
                             console.print(f"        • Dense: {fusion.get('dense', 0):.3f} | BM25: {fusion.get('bm25', 0):.3f} | α: {fusion.get('alpha', 0):.2f} | Fused: {fusion.get('fused', 0):.3f}")
+                        # Terms
                         terms = sparse.get('terms', [])
                         if terms:
                             top_terms = ", ".join([f"{t['t']} (tf {t['tf']}, idf {t['idf']:.2f})" for t in terms])
                             console.print(f"      Top terms: {top_terms}")
+        
+        # Save query if auto-save is enabled for this session
+        if save_session:
+            save_query_result(q, ans, sources, evidence_map, followup_questions, style_choice if 'style_choice' in locals() else 'detailed')
+            console.print("\n💾 [green]Query saved to data/query_history.jsonl[/green]")
 
 
 if __name__ == "__main__":
